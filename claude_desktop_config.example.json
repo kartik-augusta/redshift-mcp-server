@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "redshift": {
+      "command": "python",
+      "args": ["/path/to/your/redshift-mcp-server/server.py"],
+      "cwd": "/path/to/your/redshift-mcp-server",
+      "env": {
+        "RS_HOST": "your-cluster.region.redshift.amazonaws.com",
+        "RS_DB": "your_database_name", 
+        "RS_USER": "your_readonly_user",
+        "RS_PASS": "your_password",
+        "SSH_TUNNEL": "true",
+        "SSH_HOST": "your-bastion-host.example.com",
+        "SSH_PORT": "22",
+        "SSH_USER": "your_ssh_username", 
+        "SSH_KEY_FILE": "/path/to/your/ssh-key.pem",
+        "LOCAL_PORT": "5439"
+      }
+    }
+  }
+}

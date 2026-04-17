@@ -1,0 +1,78 @@
+# Environment and Secrets
+.env
+*.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+mcp_server.log
+mcp_monitor.log
+
+# SSH Keys (extra safety)
+*.pem
+*.key
+id_rsa*
+
+# Cache
+.mypy_cache/
+.pytest_cache/
+.coverage
+
+# Claude Desktop Config (contains credentials)
+claude_desktop_config.json
+claude_desktop_config_fixed.json
+
+# Temporary files
+*.tmp
+*.bak
+temp/
+tmp/
