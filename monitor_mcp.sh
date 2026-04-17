@@ -3,7 +3,7 @@
 # MCP Server Monitor & Auto-Restart Script
 # This script monitors the MCP server and restarts it if it fails
 
-SERVER_DIR="/Users/parivallal/workspace/claud"
+SERVER_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="$SERVER_DIR/mcp_monitor.log"
 PID_FILE="$SERVER_DIR/mcp_server.pid"
 

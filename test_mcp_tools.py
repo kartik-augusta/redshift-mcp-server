@@ -13,7 +13,8 @@ from sshtunnel import SSHTunnelForwarder
 load_dotenv()
 
 # Import and test our MCP tools directly
-sys.path.append('/Users/parivallal/workspace/claud')
+# Add the current directory to Python path for imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def test_mcp_tools():
     """Test the MCP server tools directly."""

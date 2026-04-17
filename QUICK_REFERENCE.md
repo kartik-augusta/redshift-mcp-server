@@ -58,11 +58,11 @@ python server.py            # Start manually
 - Local Port: 5439 (auto-finds alternatives if in use)
 
 ## Database Connection
-- Host: data-warehouse-staging.cok2x4mwh0bp.ap-southeast-1.redshift.amazonaws.com
-- Database: data_warehouse
-- User: claude_readonly (read-only)
+- Host: your-cluster.region.redshift.amazonaws.com
+- Database: your_database_name
+- User: your_readonly_user
 - Connection: Via SSH tunnel to localhost:5439
-- **Restricted to**: Gold schema only (33 tables)
+- **Restricted to**: Gold schema only
 
 ## Usage Examples in Claude Desktop
 - "Show me what schemas I have access to" → Returns: ["gold"]

@@ -37,7 +37,7 @@ Your Redshift MCP Server is now prepared as a **standalone project** ready for G
 
 ### Step 2: Upload Your Code
 ```bash
-cd /Users/parivallal/workspace/redshift-mcp-server-standalone
+cd /path/to/your/redshift-mcp-server-standalone
 
 # Commit your files
 git commit -m "Initial commit: Enterprise Redshift MCP Server with security"

@@ -735,7 +735,7 @@ lsof -i :5439  # Check port usage
 ./monitor_mcp.sh clean  # Force cleanup
 
 # SSH tunnel issues
-ssh -i ~/.ssh/id_rsa access@18.140.23.27  # Test SSH directly
+ssh -i ~/.ssh/id_rsa access@your-bastion-host  # Test SSH directly
 
 # Database connectivity
 python test_connection.py  # Isolated connection test

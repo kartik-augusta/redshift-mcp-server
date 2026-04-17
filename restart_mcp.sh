@@ -9,7 +9,7 @@ pkill -f "/Users/parivallal/workspace/claud/server.py" 2>/dev/null || true
 
 # Kill any SSH tunnels to our bastion
 echo "🔒 Cleaning up SSH tunnels..."
-pkill -f "ssh.*18.140.23.27" 2>/dev/null || true
+pkill -f "ssh.*${SSH_HOST:-your-bastion-host}" 2>/dev/null || true
 
 # Wait a moment for cleanup
 sleep 2
@@ -23,7 +23,7 @@ fi
 
 # Test SSH connection
 echo "🔗 Testing SSH connection..."
-if ssh -i /Users/parivallal/.ssh/id_rsa -o ConnectTimeout=10 access@18.140.23.27 "echo 'OK'" >/dev/null 2>&1; then
+if ssh -i ${SSH_KEY_FILE:-~/.ssh/id_rsa} -o ConnectTimeout=10 ${SSH_USER:-access}@${SSH_HOST:-your-bastion-host} "echo 'OK'" >/dev/null 2>&1; then
     echo "✅ SSH connection test passed"
 else
     echo "❌ SSH connection test failed"
