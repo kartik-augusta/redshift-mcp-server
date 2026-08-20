@@ -132,26 +132,26 @@ The repository includes a comprehensive testing suite and diagnostic tools:
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        CD[Claude Desktop / MCP Client]
+        CD["Claude Desktop / MCP Client"]
     end
     
     subgraph "MCP Server Layer"
-        MCP[FastMCP Server]
-        CONFIG[config.py / .env]
-        VALIDATION[SQL & Schema Validation]
+        MCP["FastMCP Server"]
+        CONFIG["config.py / .env"]
+        VALIDATION["SQL & Schema Validation"]
     end
     
     subgraph "Network Layer"  
-        SSH[SSH Tunnel<br/>(Optional)]
-        CONN[Connection Cache]
+        SSH["SSH Tunnel<br/>(Optional)"]
+        CONN["Connection Cache"]
     end
     
     subgraph "Database Layer"
-        RS[Amazon Redshift]
-        SCHEMA[Allowed Schemas]
+        RS["Amazon Redshift"]
+        SCHEMA["Allowed Schemas"]
     end
     
-    CD -->|JSON-RPC (stdio/sse)| MCP
+    CD -->|"JSON-RPC (stdio/sse)"| MCP
     MCP --> CONFIG
     MCP --> VALIDATION
     VALIDATION --> CONN
