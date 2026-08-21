@@ -1,0 +1,17 @@
+[Unit]
+Description=Redshift MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/redshift-mcp-server
+ExecStart=/home/ec2-user/redshift-mcp-server/.venv/bin/python server.py --sse --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ec2-user/redshift-mcp-server/.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
