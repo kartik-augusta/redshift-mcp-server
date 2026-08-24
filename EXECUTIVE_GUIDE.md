@@ -47,7 +47,7 @@ To connect your Claude Desktop application to this server, you will need to add 
 Run the following command in your terminal, replacing `<MCP_NAME>` with your preferred name (e.g., `redshift`) and `<MCP_URL>` with the provided server URL:
 
 ```bash
-claude mcp add --transport sse <MCP_NAME> <MCP_URL>/sse
+claude mcp add --transport http <MCP_NAME> <MCP_URL>/mcp
 ```
 
 ### Manual Configuration
@@ -59,10 +59,8 @@ Add the following JSON block:
 {
   "mcpServers": {
     "<MCP_NAME>": {
-        "transport": {
-            "type": "sse",
-            "url": "<MCP_URL>/sse"
-        }
+        "type": "http",
+        "url": "<MCP_URL>/mcp"
     }
   }
 }

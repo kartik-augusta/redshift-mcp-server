@@ -6,7 +6,7 @@ This MCP (Model Context Protocol) server provides secure, read-only access to Am
 
 - **10 Specialized Tools**: A full suite of tools for data discovery, metadata extraction, querying, and exporting.
 - **Dynamic Configuration**: Fully configurable via `.env` (allowlists, row limits, connection parameters).
-- **Transport Modes**: Supports both `stdio` (for local clients like Claude Desktop) and `sse` (Server-Sent Events over HTTP for remote connections).
+- **Transport Modes**: Supports both `stdio` (for local clients like Claude Desktop) and modern `streamable-http` (Streamable HTTP over `/mcp` for remote connections).
 - **Connection Caching**: Efficient connection management with single long-lived health-checked connections to Redshift.
 - **Enterprise Security**: 
   - Strictly read-only SQL validation.
@@ -84,11 +84,12 @@ Best when the MCP Client (e.g. Claude Desktop) is running on the *same machine*.
 python server.py
 ```
 
-**Mode 2: `sse` (HTTP)**
+
+**Mode 2: Streamable HTTP (`/mcp`)**
 Best for accessing the server remotely via HTTP or tunnels.
 ```bash
-# Start SSE on port 8000
-python server.py --sse --host 0.0.0.0 --port 8000
+# Start Streamable HTTP server on port 8000
+python server.py --http --host 0.0.0.0 --port 8000
 ```
 
 ## 🔌 Connecting to the Server
@@ -110,14 +111,31 @@ If your Claude Desktop is running on the same machine as the server, edit your C
 }
 ```
 
-### Option B: Remote Connection (SSE + IDE)
+### Option B: Remote Connection (Streamable HTTP)
 
-If the server is running on a remote EC2 instance, start the server in `--sse` mode. 
+If the server is running on a remote EC2 instance, start the server with `python server.py --http --port 8000`.
 
-For IDEs that support direct SSE connections (like VS Code with Cline):
+#### Using Claude CLI:
+```bash
+claude mcp add --transport http redshift http://<EC2-IP>:8000/mcp
+```
+
+#### In Claude Desktop configuration (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "redshift": {
+      "type": "http",
+      "url": "http://<EC2-IP>:8000/mcp"
+    }
+  }
+}
+```
+
+#### In IDE Extensions (VS Code, Cline, RooCode):
 1. Add a new MCP server.
-2. Set transport type to **SSE**.
-3. Use the URL: `http://<EC2-IP>:8000/sse` (or your tunnel URL).
+2. Select transport type: **HTTP** / **Streamable HTTP**.
+3. Use URL: `http://<EC2-IP>:8000/mcp` (or your tunnel URL).
 
 ## 🧪 Testing & Validation
 
@@ -151,7 +169,7 @@ graph TB
         SCHEMA["Allowed Schemas"]
     end
     
-    CD -->|"JSON-RPC (stdio/sse)"| MCP
+    CD -->|"JSON-RPC (stdio/http)"| MCP
     MCP --> CONFIG
     MCP --> VALIDATION
     VALIDATION --> CONN

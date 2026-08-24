@@ -548,26 +548,39 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Redshift MCP Server")
     parser.add_argument(
-        "--sse", action="store_true",
-        help="Run in SSE (HTTP) mode instead of stdio",
+        "--http",
+        "--streamable-http",
+        action="store_true",
+        dest="http",
+        help="Run in Streamable HTTP mode (/mcp) instead of stdio",
     )
     parser.add_argument(
-        "--host", default="0.0.0.0",
-        help="Host to bind when using --sse (default: 0.0.0.0)",
+        "--transport",
+        choices=["stdio", "http", "streamable-http"],
+        default=None,
+        help="Transport protocol to use (default: stdio)",
     )
     parser.add_argument(
-        "--port", type=int, default=8000,
-        help="Port to bind when using --sse (default: 8000)",
+        "--host",
+        default="0.0.0.0",
+        help="Host to bind when using HTTP mode (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind when using HTTP mode (default: 8000)",
     )
     args = parser.parse_args()
 
-    if args.sse:
-        print(f"🚀 Starting Redshift MCP server in SSE mode on {args.host}:{args.port}")
-        # host/port are constructor params, so reconfigure the instance
+    use_http = args.http or args.transport in ("http", "streamable-http")
+
+    if use_http:
+        print(f"🚀 Starting Redshift MCP server in Streamable HTTP mode on http://{args.host}:{args.port}/mcp")
         mcp._host = args.host
         mcp._port = args.port
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        mcp.run(transport="sse")
+        mcp.run(transport="streamable-http")
     else:
         mcp.run()
