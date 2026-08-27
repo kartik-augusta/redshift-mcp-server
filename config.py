@@ -45,3 +45,6 @@ SSH_USER: str | None = os.environ.get("SSH_USER")
 SSH_KEY_FILE: str | None = os.environ.get("SSH_KEY_FILE")
 SSH_PASSWORD: str | None = os.environ.get("SSH_PASSWORD")
 LOCAL_PORT: int = int(os.environ.get("LOCAL_PORT", "5439"))
+
+# ── API key authentication ───────────────────────────────────────────────────
+MCP_API_KEY: str | None = os.environ.get("MCP_API_KEY")

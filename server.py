@@ -545,6 +545,7 @@ def export_to_csv(sql: str) -> str:
 
 if __name__ == "__main__":
     import argparse
+    import asyncio
 
     parser = argparse.ArgumentParser(description="Redshift MCP Server")
     parser.add_argument(
@@ -576,11 +577,59 @@ if __name__ == "__main__":
     use_http = args.http or args.transport in ("http", "streamable-http")
 
     if use_http:
-        print(f"🚀 Starting Redshift MCP server in Streamable HTTP mode on http://{args.host}:{args.port}/mcp")
-        mcp._host = args.host
-        mcp._port = args.port
+        import uvicorn
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.types import ASGIApp, Receive, Scope, Send
+
+        # ── API key middleware ────────────────────────────────────────────
+        class ApiKeyMiddleware:
+            """ASGI middleware that validates an API key on every request.
+
+            Expects the header:  Authorization: Bearer <MCP_API_KEY>
+            If MCP_API_KEY is not set in config, authentication is disabled.
+            """
+
+            def __init__(self, app: ASGIApp, api_key: str | None):
+                self.app = app
+                self.api_key = api_key
+
+            async def __call__(self, scope: Scope, receive: Receive, send: Send):
+                if scope["type"] != "http" or self.api_key is None:
+                    # Not an HTTP request, or auth is disabled — pass through
+                    return await self.app(scope, receive, send)
+
+                request = Request(scope)
+                auth_header = request.headers.get("authorization", "")
+
+                if auth_header == f"Bearer {self.api_key}":
+                    return await self.app(scope, receive, send)
+
+                # Reject with 401
+                response = JSONResponse(
+                    {"error": "Unauthorized – invalid or missing API key"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+                return await response(scope, receive, send)
+
+        # ── Build and wrap the Starlette app ──────────────────────────────
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        mcp.run(transport="streamable-http")
+        starlette_app = mcp.streamable_http_app()
+        wrapped_app = ApiKeyMiddleware(starlette_app, config.MCP_API_KEY)
+
+        auth_status = "🔒 API key authentication ENABLED" if config.MCP_API_KEY else "⚠️  No MCP_API_KEY set — authentication DISABLED"
+        print(f"🚀 Starting Redshift MCP server in Streamable HTTP mode on http://{args.host}:{args.port}/mcp")
+        print(f"   {auth_status}")
+
+        uvi_config = uvicorn.Config(
+            wrapped_app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+        )
+        server = uvicorn.Server(uvi_config)
+        asyncio.run(server.serve())
     else:
         mcp.run()
