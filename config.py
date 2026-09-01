@@ -48,3 +48,9 @@ LOCAL_PORT: int = int(os.environ.get("LOCAL_PORT", "5439"))
 
 # ── API key authentication ───────────────────────────────────────────────────
 MCP_API_KEY: str | None = os.environ.get("MCP_API_KEY")
+
+# ── AWS Cognito OIDC authentication ─────────────────────────────────────────
+COGNITO_USER_POOL_ID: str | None = os.environ.get("COGNITO_USER_POOL_ID")
+COGNITO_CLIENT_ID: str | None = os.environ.get("COGNITO_CLIENT_ID")
+COGNITO_REGION: str = os.environ.get("COGNITO_REGION", "us-east-2")
+MCP_PUBLIC_URL: str = os.environ.get("MCP_PUBLIC_URL", "https://<YOUR_IP_OR_DOMAIN>/mcp")

@@ -581,35 +581,102 @@ if __name__ == "__main__":
         from starlette.requests import Request
         from starlette.responses import JSONResponse
         from starlette.types import ASGIApp, Receive, Scope, Send
+        from token_verifier import CognitoTokenVerifier
 
-        # ── API key middleware ────────────────────────────────────────────
-        class ApiKeyMiddleware:
-            """ASGI middleware that validates an API key on every request.
+        # ── Cognito Token Verifier instance (if configured) ───────────────
+        cognito_verifier: CognitoTokenVerifier | None = None
+        if config.COGNITO_USER_POOL_ID and config.COGNITO_CLIENT_ID:
+            cognito_verifier = CognitoTokenVerifier(
+                user_pool_id=config.COGNITO_USER_POOL_ID,
+                client_id=config.COGNITO_CLIENT_ID,
+                region=config.COGNITO_REGION,
+            )
 
-            Expects the header:  Authorization: Bearer <MCP_API_KEY>
-            If MCP_API_KEY is not set in config, authentication is disabled.
+        # ── Dual Authentication Middleware (Cognito OIDC + API Key) ───────
+        class AuthMiddleware:
+            """ASGI middleware supporting AWS Cognito OIDC JWTs and API key fallback.
+
+            1. Allows RFC 9728 Protected Resource Metadata discovery at /.well-known/oauth-protected-resource
+            2. Allows CORS preflight OPTIONS requests
+            3. Validates Authorization: Bearer <TOKEN> against:
+               - Static MCP_API_KEY (fast path fallback)
+               - AWS Cognito User Pool JWT (RS256 signature + claims)
+            4. Returns 401 with WWW-Authenticate header if unauthenticated.
             """
 
-            def __init__(self, app: ASGIApp, api_key: str | None):
+            def __init__(
+                self,
+                app: ASGIApp,
+                api_key: str | None,
+                verifier: CognitoTokenVerifier | None,
+                public_url: str,
+            ):
                 self.app = app
                 self.api_key = api_key
+                self.verifier = verifier
+                self.public_url = public_url.rstrip("/")
 
             async def __call__(self, scope: Scope, receive: Receive, send: Send):
-                if scope["type"] != "http" or self.api_key is None:
-                    # Not an HTTP request, or auth is disabled — pass through
+                if scope["type"] != "http":
                     return await self.app(scope, receive, send)
 
                 request = Request(scope)
-                auth_header = request.headers.get("authorization", "")
+                path = request.url.path
 
-                if auth_header == f"Bearer {self.api_key}":
+                # RFC 9728: Protected Resource Metadata endpoint
+                if path.endswith("/.well-known/oauth-protected-resource") and request.method == "GET":
+                    auth_servers = []
+                    if self.verifier:
+                        auth_servers.append(self.verifier.issuer)
+                    prm = {
+                        "resource": self.public_url,
+                        "authorization_servers": auth_servers,
+                        "scopes_supported": ["openid", "profile", "email"],
+                    }
+                    response = JSONResponse(prm, status_code=200)
+                    return await response(scope, receive, send)
+
+                # Allow CORS preflight requests
+                if request.method == "OPTIONS":
                     return await self.app(scope, receive, send)
 
-                # Reject with 401
+                # If no authentication method is configured, pass through
+                if not self.api_key and not self.verifier:
+                    return await self.app(scope, receive, send)
+
+                auth_header = request.headers.get("authorization", "")
+                if auth_header.startswith("Bearer "):
+                    token = auth_header[7:].strip()
+
+                    # 1. Check API Key fallback
+                    if self.api_key and token == self.api_key:
+                        return await self.app(scope, receive, send)
+
+                    # 2. Check Cognito OIDC JWT
+                    if self.verifier:
+                        claims = await self.verifier.verify_token(token)
+                        if claims is not None:
+                            # Attach authenticated user identity to scope
+                            user_identity = (
+                                claims.get("cognito:username")
+                                or claims.get("username")
+                                or claims.get("email")
+                                or claims.get("sub")
+                            )
+                            scope["auth_user"] = user_identity
+                            return await self.app(scope, receive, send)
+
+                # Unauthenticated: build WWW-Authenticate header
+                if self.verifier:
+                    prm_url = f"{self.public_url}/.well-known/oauth-protected-resource"
+                    www_auth = f'Bearer realm="redshift-mcp", resource_metadata="{prm_url}"'
+                else:
+                    www_auth = 'Bearer realm="redshift-mcp"'
+
                 response = JSONResponse(
-                    {"error": "Unauthorized – invalid or missing API key"},
+                    {"error": "Unauthorized – invalid or missing token / API key"},
                     status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={"WWW-Authenticate": www_auth},
                 )
                 return await response(scope, receive, send)
 
@@ -617,11 +684,24 @@ if __name__ == "__main__":
         mcp.settings.host = args.host
         mcp.settings.port = args.port
         starlette_app = mcp.streamable_http_app()
-        wrapped_app = ApiKeyMiddleware(starlette_app, config.MCP_API_KEY)
+        wrapped_app = AuthMiddleware(
+            starlette_app,
+            api_key=config.MCP_API_KEY,
+            verifier=cognito_verifier,
+            public_url=config.MCP_PUBLIC_URL,
+        )
 
-        auth_status = "🔒 API key authentication ENABLED" if config.MCP_API_KEY else "⚠️  No MCP_API_KEY set — authentication DISABLED"
         print(f"🚀 Starting Redshift MCP server in Streamable HTTP mode on http://{args.host}:{args.port}/mcp")
-        print(f"   {auth_status}")
+        if cognito_verifier and config.MCP_API_KEY:
+            print(f"   🛡️  Dual authentication ENABLED:")
+            print(f"      • AWS Cognito OIDC (User Pool: {config.COGNITO_USER_POOL_ID}, Client ID: {config.COGNITO_CLIENT_ID})")
+            print(f"      • Static API Key fallback (MCP_API_KEY)")
+        elif cognito_verifier:
+            print(f"   🔒 AWS Cognito OIDC authentication ENABLED (User Pool: {config.COGNITO_USER_POOL_ID})")
+        elif config.MCP_API_KEY:
+            print(f"   🔑 API key authentication ENABLED (MCP_API_KEY)")
+        else:
+            print(f"   ⚠️  No authentication configured — server is OPEN")
 
         uvi_config = uvicorn.Config(
             wrapped_app,

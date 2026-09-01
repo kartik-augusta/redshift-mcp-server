@@ -111,31 +111,68 @@ If your Claude Desktop is running on the same machine as the server, edit your C
 }
 ```
 
-### Option B: Remote Connection (Streamable HTTP)
+### Option B: Remote Connection (Streamable HTTP with Authentication)
 
-If the server is running on a remote EC2 instance, start the server with `python server.py --http --port 8000`.
+When exposing the server over HTTP/HTTPS, the server enforces authentication using **AWS Cognito OIDC (OAuth 2.1)** and/or **API Key Bearer Token**:
 
-#### Using Claude CLI:
-```bash
-claude mcp add --transport http redshift http://<EC2-IP>:8000/mcp
-```
+#### Method 1: Using `mcp-remote` with OAuth / OIDC or API Key (Recommended for Claude Desktop)
 
-#### In Claude Desktop configuration (`claude_desktop_config.json`):
+In your Claude Desktop config (`claude_desktop_config.json`):
+
+**With API Key:**
 ```json
 {
   "mcpServers": {
-    "redshift": {
-      "type": "http",
-      "url": "http://<EC2-IP>:8000/mcp"
+    "capsa-mcp": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://<YOUR_IP_OR_DOMAIN>/mcp",
+        "--header",
+        "Authorization: Bearer <YOUR_MCP_API_KEY>",
+        "--transport",
+        "http-only"
+      ],
+      "env": {
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+      }
     }
   }
 }
 ```
 
-#### In IDE Extensions (VS Code, Cline, RooCode):
-1. Add a new MCP server.
-2. Select transport type: **HTTP** / **Streamable HTTP**.
-3. Use URL: `http://<EC2-IP>:8000/mcp` (or your tunnel URL).
+**With AWS Cognito OAuth / OIDC:**
+```json
+{
+  "mcpServers": {
+    "capsa-mcp": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://<YOUR_IP_OR_DOMAIN>/mcp"
+      ],
+      "env": {
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+      }
+    }
+  }
+}
+```
+
+#### Method 2: Direct HTTP Transport with Headers
+```json
+{
+  "mcpServers": {
+    "redshift": {
+      "type": "http",
+      "url": "https://<YOUR_IP_OR_DOMAIN>/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_MCP_API_KEY_OR_COGNITO_JWT>"
+      }
+    }
+  }
+}
+```
 
 ## 🧪 Testing & Validation
 
