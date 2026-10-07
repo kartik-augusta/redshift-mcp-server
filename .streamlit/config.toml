@@ -1,0 +1,18 @@
+[server]
+port = 8000
+address = "0.0.0.0"
+headless = true
+runOnSave = false
+enableCORS = false
+enableXsrfProtection = false
+
+[theme]
+primaryColor = "#6366f1"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1b2e"
+textColor = "#fafafa"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+serverAddress = "0.0.0.0"

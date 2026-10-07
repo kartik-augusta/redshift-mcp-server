@@ -569,8 +569,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port to bind when using HTTP mode (default: 8000)",
+        default=8001,
+        help="Port to bind when using HTTP mode (default: 8001)",
     )
     args = parser.parse_args()
 
@@ -594,13 +594,13 @@ if __name__ == "__main__":
 
         # ── Dual Authentication Middleware (Cognito OIDC + API Key) ───────
         class AuthMiddleware:
-            """ASGI middleware supporting AWS Cognito OIDC JWTs and API key fallback.
+            """ASGI middleware supporting AWS Cognito OIDC JWTs and x-api-key fallback.
 
             1. Allows RFC 9728 Protected Resource Metadata discovery at /.well-known/oauth-protected-resource
             2. Allows CORS preflight OPTIONS requests
-            3. Validates Authorization: Bearer <TOKEN> against:
-               - Static MCP_API_KEY (fast path fallback)
-               - AWS Cognito User Pool JWT (RS256 signature + claims)
+            3. Authenticates via:
+               - x-api-key header: Static MCP_API_KEY (fast path)
+               - Authorization: Bearer <JWT>: AWS Cognito User Pool JWT (RS256 signature + claims)
             4. Returns 401 with WWW-Authenticate header if unauthenticated.
             """
 
@@ -644,27 +644,26 @@ if __name__ == "__main__":
                 if not self.api_key and not self.verifier:
                     return await self.app(scope, receive, send)
 
+                # 1. Check x-api-key header for static API key
+                api_key_header = request.headers.get("x-api-key", "").strip()
+                if api_key_header and self.api_key and api_key_header == self.api_key:
+                    return await self.app(scope, receive, send)
+
+                # 2. Check Authorization: Bearer header for Cognito OIDC JWT
                 auth_header = request.headers.get("authorization", "")
-                if auth_header.startswith("Bearer "):
+                if auth_header.startswith("Bearer ") and self.verifier:
                     token = auth_header[7:].strip()
-
-                    # 1. Check API Key fallback
-                    if self.api_key and token == self.api_key:
+                    claims = await self.verifier.verify_token(token)
+                    if claims is not None:
+                        # Attach authenticated user identity to scope
+                        user_identity = (
+                            claims.get("cognito:username")
+                            or claims.get("username")
+                            or claims.get("email")
+                            or claims.get("sub")
+                        )
+                        scope["auth_user"] = user_identity
                         return await self.app(scope, receive, send)
-
-                    # 2. Check Cognito OIDC JWT
-                    if self.verifier:
-                        claims = await self.verifier.verify_token(token)
-                        if claims is not None:
-                            # Attach authenticated user identity to scope
-                            user_identity = (
-                                claims.get("cognito:username")
-                                or claims.get("username")
-                                or claims.get("email")
-                                or claims.get("sub")
-                            )
-                            scope["auth_user"] = user_identity
-                            return await self.app(scope, receive, send)
 
                 # Unauthenticated: build WWW-Authenticate header
                 if self.verifier:
@@ -695,7 +694,7 @@ if __name__ == "__main__":
         if cognito_verifier and config.MCP_API_KEY:
             print(f"   🛡️  Dual authentication ENABLED:")
             print(f"      • AWS Cognito OIDC (User Pool: {config.COGNITO_USER_POOL_ID}, Client ID: {config.COGNITO_CLIENT_ID})")
-            print(f"      • Static API Key fallback (MCP_API_KEY)")
+            print(f"      • Static API Key fallback (x-api-key header)")
         elif cognito_verifier:
             print(f"   🔒 AWS Cognito OIDC authentication ENABLED (User Pool: {config.COGNITO_USER_POOL_ID})")
         elif config.MCP_API_KEY:

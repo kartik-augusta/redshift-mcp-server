@@ -14,7 +14,7 @@ ALLOWED_SCHEMAS: list[str] = [
     s.strip().lower()
     for s in os.environ.get(
         "ALLOWED_SCHEMAS",
-        "gold_capsaai,gold_capsaai_cefi,gold_capsaai_cspp,report_capsaai",
+        "gold_capsaai,gold_capsaai_cefi,gold_capsaai_cspp,report_capsaai,report_insight",
     ).split(",")
     if s.strip()
 ]
@@ -54,3 +54,4 @@ COGNITO_USER_POOL_ID: str | None = os.environ.get("COGNITO_USER_POOL_ID")
 COGNITO_CLIENT_ID: str | None = os.environ.get("COGNITO_CLIENT_ID")
 COGNITO_REGION: str = os.environ.get("COGNITO_REGION", "us-east-2")
 MCP_PUBLIC_URL: str = os.environ.get("MCP_PUBLIC_URL", "https://<YOUR_IP_OR_DOMAIN>/mcp")
+MCP_SERVER_PORT: int = int(os.environ.get("MCP_SERVER_PORT", "8001"))

@@ -1,12 +1,13 @@
 [Unit]
-Description=Redshift MCP Server
-After=network.target
+Description=Redshift MCP Streamlit UI
+After=network.target redshift-mcp.service
+Requires=redshift-mcp.service
 
 [Service]
 Type=simple
 User=ec2-user
 WorkingDirectory=/home/ec2-user/redshift-mcp-server
-ExecStart=/home/ec2-user/redshift-mcp-server/.venv/bin/python server.py --http --host 127.0.0.1 --port 8001
+ExecStart=/home/ec2-user/redshift-mcp-server/.venv/bin/streamlit run streamlit_app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true
 Restart=always
 RestartSec=5
 EnvironmentFile=/home/ec2-user/redshift-mcp-server/.env
