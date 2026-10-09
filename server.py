@@ -1,7 +1,12 @@
 """
 Redshift MCP Server — read-only tools for exploring and querying a Redshift warehouse.
 
-All tunables (schemas, limits, timeouts) are read from config.py / environment variables.
+Productionized entry point with:
+- Validated fail-closed configuration
+- Generic OIDC authentication (works with Cognito, Entra ID, etc.)
+- Group-based authorization with default-deny policy
+- API key dev fallback
+- Request context propagation
 """
 
 from mcp.server.fastmcp import FastMCP
@@ -18,9 +23,15 @@ import time
 import signal
 import sys
 
-import config
+from src.settings import load_settings, Settings
+from src.auth.oidc_verifier import OIDCVerifier
+from src.auth.policy import AuthzPolicy
+from src.auth.context import get_current_principal, get_request_id
+from src.auth.decorators import require_authz, set_policy
 
-# ─────────────────────────── Global state ────────────────────────────────────
+# ─────────────────────────── Settings & state ────────────────────────────────
+
+settings: Settings = load_settings()
 
 ssh_tunnel = None       # Global SSH tunnel instance
 _cached_conn = None     # Cached database connection
@@ -52,8 +63,8 @@ def setup_ssh_tunnel():
     """Set up SSH tunnel if enabled in environment variables."""
     global ssh_tunnel
 
-    if config.SSH_TUNNEL_ENABLED:
-        if not all([config.SSH_HOST, config.SSH_USER]):
+    if settings.ssh_tunnel_enabled:
+        if not all([settings.ssh_host, settings.ssh_user]):
             raise ValueError("SSH_HOST and SSH_USER are required when SSH_TUNNEL=true")
 
         # Check if tunnel already exists and is active
@@ -61,57 +72,57 @@ def setup_ssh_tunnel():
             print(f"✅ Using existing SSH tunnel on port {ssh_tunnel.local_bind_port}")
             return "127.0.0.1", ssh_tunnel.local_bind_port
 
-        local_port = config.LOCAL_PORT
+        local_port = settings.local_port
 
         # Find available port if default is in use
         if is_port_in_use(local_port):
             print(f"⚠️  Port {local_port} is in use, finding alternative...")
             local_port = find_available_port(
-                local_port, local_port + config.PORT_SCAN_RANGE
+                local_port, local_port + settings.port_scan_range
             )
             print(f"🔄 Using port {local_port}")
 
         # Prepare SSH authentication
         ssh_auth = {}
-        if config.SSH_KEY_FILE and os.path.exists(
-            os.path.expanduser(config.SSH_KEY_FILE)
+        if settings.ssh_key_file and os.path.exists(
+            os.path.expanduser(settings.ssh_key_file)
         ):
-            ssh_auth["ssh_pkey"] = os.path.expanduser(config.SSH_KEY_FILE)
-        elif config.SSH_PASSWORD:
-            ssh_auth["ssh_password"] = config.SSH_PASSWORD
+            ssh_auth["ssh_pkey"] = os.path.expanduser(settings.ssh_key_file)
+        elif settings.ssh_password:
+            ssh_auth["ssh_password"] = settings.ssh_password
         else:
             raise ValueError(
                 "Either SSH_KEY_FILE or SSH_PASSWORD is required for SSH tunnel"
             )
 
-        print(f"🔗 Setting up SSH tunnel to {config.SSH_HOST}:{config.SSH_PORT}")
+        print(f"🔗 Setting up SSH tunnel to {settings.ssh_host}:{settings.ssh_port}")
 
-        for attempt in range(config.MAX_RETRIES):
+        for attempt in range(settings.max_retries):
             try:
                 ssh_tunnel = SSHTunnelForwarder(
-                    (config.SSH_HOST, config.SSH_PORT),
-                    ssh_username=config.SSH_USER,
+                    (settings.ssh_host, settings.ssh_port),
+                    ssh_username=settings.ssh_user,
                     **ssh_auth,
-                    remote_bind_address=(config.RS_HOST, config.RS_PORT),
+                    remote_bind_address=(settings.rs_host, settings.rs_port),
                     local_bind_address=("127.0.0.1", local_port),
-                    set_keepalive=config.SSH_KEEPALIVE,
+                    set_keepalive=settings.ssh_keepalive,
                     allow_agent=False,
                     compression=True,
                 )
 
                 print(
-                    f"🔄 Attempt {attempt + 1}/{config.MAX_RETRIES} - Starting SSH tunnel..."
+                    f"🔄 Attempt {attempt + 1}/{settings.max_retries} - Starting SSH tunnel..."
                 )
                 ssh_tunnel.start()
 
                 # Test the tunnel
-                for _ in range(config.CONNECT_TIMEOUT):
+                for _ in range(settings.connect_timeout):
                     time.sleep(1)
                     if ssh_tunnel.is_active:
                         break
                 else:
                     raise Exception(
-                        f"SSH tunnel failed to become active within {config.CONNECT_TIMEOUT} seconds"
+                        f"SSH tunnel failed to become active within {settings.connect_timeout} seconds"
                     )
 
                 print(
@@ -133,17 +144,17 @@ def setup_ssh_tunnel():
                         pass
                     ssh_tunnel = None
 
-                if attempt < config.MAX_RETRIES - 1:
+                if attempt < settings.max_retries - 1:
                     wait_time = 2**attempt
                     print(f"🔄 Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                 else:
-                    print(f"❌ All {config.MAX_RETRIES} SSH tunnel attempts failed")
+                    print(f"❌ All {settings.max_retries} SSH tunnel attempts failed")
                     raise Exception(
-                        f"SSH tunnel failed after {config.MAX_RETRIES} attempts: {e}"
+                        f"SSH tunnel failed after {settings.max_retries} attempts: {e}"
                     )
     else:
-        return config.RS_HOST, config.RS_PORT
+        return settings.rs_host, settings.rs_port
 
 
 def signal_handler(signum, frame):
@@ -195,22 +206,23 @@ def get_conn():
             _cached_conn = None
 
     # Slow path: establish a new connection with retries
-    for attempt in range(config.MAX_RETRIES):
+    for attempt in range(settings.max_retries):
         try:
             host, port = setup_ssh_tunnel()
 
             print(
-                f"🔄 Connecting to database (attempt {attempt + 1}/{config.MAX_RETRIES})..."
+                f"🔄 Connecting to database (attempt {attempt + 1}/{settings.max_retries})..."
             )
             conn = psycopg2.connect(
                 host=host,
                 port=port,
-                dbname=config.RS_DB,
-                user=config.RS_USER,
-                password=config.RS_PASS,
+                dbname=settings.rs_db,
+                user=settings.rs_user,
+                password=settings.rs_pass,
                 sslmode="require" if host != "127.0.0.1" else "prefer",
-                connect_timeout=config.CONNECT_TIMEOUT,
+                connect_timeout=settings.connect_timeout,
                 application_name="MCP_Redshift_Server",
+                options=f"-c statement_timeout={settings.db_statement_timeout_ms}",
             )
 
             # Validate connection
@@ -225,10 +237,10 @@ def get_conn():
         except Exception as e:
             print(f"❌ Database connection attempt {attempt + 1} failed: {e}")
 
-            if attempt == config.MAX_RETRIES - 1:
+            if attempt == settings.max_retries - 1:
                 cleanup_ssh_tunnel()
                 raise Exception(
-                    f"Database connection failed after {config.MAX_RETRIES} attempts: {e}"
+                    f"Database connection failed after {settings.max_retries} attempts: {e}"
                 )
             else:
                 wait_time = 2**attempt
@@ -241,10 +253,10 @@ def get_conn():
 
 def _validate_schema(schema: str) -> str:
     """Validate and normalise a schema name against the allowlist."""
-    schema = (schema or config.DEFAULT_SCHEMA).strip().lower()
-    if schema not in config.ALLOWED_SCHEMAS:
+    schema = (schema or settings.default_schema).strip().lower()
+    if schema not in settings.allowed_schemas:
         raise ValueError(
-            f"Schema '{schema}' is not in the allowed list: {config.ALLOWED_SCHEMAS}"
+            f"Schema '{schema}' is not in the allowed list: {settings.allowed_schemas}"
         )
     return schema
 
@@ -265,16 +277,16 @@ def _check_schema_references(sql: str) -> None:
         return
     schema_table_pattern = r"\b(\w+)\.(\w+)\b"
     for schema, table in re.findall(schema_table_pattern, sql):
-        if schema.lower() not in config.ALLOWED_SCHEMAS:
+        if schema.lower() not in settings.allowed_schemas:
             raise ValueError(
-                f"Access restricted to schemas {config.ALLOWED_SCHEMAS}. "
+                f"Access restricted to schemas {settings.allowed_schemas}. "
                 f"Cannot query '{schema}.{table}'."
             )
 
 
 def _search_path_sql() -> str:
     """Return a SET search_path statement for all allowed schemas."""
-    return f"SET search_path = {', '.join(config.ALLOWED_SCHEMAS)}"
+    return f"SET search_path = {', '.join(settings.allowed_schemas)}"
 
 
 def _apply_limit(sql: str, max_rows: int) -> str:
@@ -286,7 +298,7 @@ def _apply_limit(sql: str, max_rows: int) -> str:
     """
     # Remove trailing semicolons and whitespace so appending LIMIT or wrapping works
     sql = sql.strip().rstrip(";")
-    
+
     if re.search(r"\bLIMIT\b", sql, re.IGNORECASE):
         return f"SELECT * FROM ({sql}) _limited LIMIT {max_rows}"
     return f"{sql} LIMIT {max_rows}"
@@ -298,31 +310,33 @@ def _apply_limit(sql: str, max_rows: int) -> str:
 
 
 @mcp.tool()
+@require_authz("list_schemas")
 def list_schemas() -> list[str]:
     """List accessible schemas in the database (filtered by the configured allowlist)."""
     conn = get_conn()
     cur = conn.cursor()
-    placeholders = ", ".join(["%s"] * len(config.ALLOWED_SCHEMAS))
+    placeholders = ", ".join(["%s"] * len(settings.allowed_schemas))
     cur.execute(
         f"SELECT nspname FROM pg_namespace "
         f"WHERE LOWER(nspname) IN ({placeholders}) ORDER BY nspname",
-        config.ALLOWED_SCHEMAS,
+        settings.allowed_schemas,
     )
     schemas = [r[0] for r in cur.fetchall()]
     return schemas
 
 
 @mcp.tool()
+@require_authz("get_allowed_schemas")
 def get_allowed_schemas() -> dict:
     """
     Return the server's schema access configuration: which schemas are in the
     allowlist, which is the default, and the current query limits.
     """
     return {
-        "allowed_schemas": config.ALLOWED_SCHEMAS,
-        "default_schema": config.DEFAULT_SCHEMA,
-        "max_rows": config.MAX_ROWS,
-        "max_export_rows": config.MAX_EXPORT_ROWS,
+        "allowed_schemas": settings.allowed_schemas,
+        "default_schema": settings.default_schema,
+        "max_rows": settings.max_rows,
+        "max_export_rows": settings.max_export_rows,
     }
 
 
@@ -330,6 +344,7 @@ def get_allowed_schemas() -> dict:
 
 
 @mcp.tool()
+@require_authz("list_tables", schema_param="schema")
 def list_tables(schema: str = "") -> list[str]:
     """List all tables in a schema. Only schemas in the allowlist are accessible."""
     schema = _validate_schema(schema)
@@ -346,6 +361,7 @@ def list_tables(schema: str = "") -> list[str]:
 
 
 @mcp.tool()
+@require_authz("describe_table", schema_param="schema")
 def describe_table(table: str, schema: str = "") -> list[dict]:
     """Get column names, data types, nullability, and defaults for a table."""
     schema = _validate_schema(schema)
@@ -372,13 +388,14 @@ def describe_table(table: str, schema: str = "") -> list[dict]:
 
 
 @mcp.tool()
+@require_authz("sample_data", schema_param="schema")
 def sample_data(table: str, schema: str = "", limit: int = 10) -> list[dict]:
     """
     Return a sample of rows from a table for quick data exploration.
     The limit is capped at the server's MAX_ROWS setting.
     """
     schema = _validate_schema(schema)
-    capped_limit = min(max(1, limit), config.MAX_ROWS)
+    capped_limit = min(max(1, limit), settings.max_rows)
     conn = get_conn()
     cur = conn.cursor()
     try:
@@ -396,6 +413,7 @@ def sample_data(table: str, schema: str = "", limit: int = 10) -> list[dict]:
 
 
 @mcp.tool()
+@require_authz("table_row_count", schema_param="schema")
 def table_row_count(table: str, schema: str = "") -> dict:
     """
     Get the row count for a table.
@@ -417,6 +435,7 @@ def table_row_count(table: str, schema: str = "") -> dict:
 
 
 @mcp.tool()
+@require_authz("search_columns", schema_param="schema")
 def search_columns(keyword: str, schema: str = "") -> list[dict]:
     """
     Search for columns whose name matches a keyword (case-insensitive) across
@@ -425,7 +444,7 @@ def search_columns(keyword: str, schema: str = "") -> list[dict]:
     if schema:
         schemas_to_search = [_validate_schema(schema)]
     else:
-        schemas_to_search = list(config.ALLOWED_SCHEMAS)
+        schemas_to_search = list(settings.allowed_schemas)
 
     conn = get_conn()
     cur = conn.cursor()
@@ -456,6 +475,7 @@ def search_columns(keyword: str, schema: str = "") -> list[dict]:
 
 
 @mcp.tool()
+@require_authz("query_data")
 def query_data(sql: str) -> list[dict]:
     """
     Run a read-only SELECT query. Only schemas in the allowlist may be referenced.
@@ -470,7 +490,7 @@ def query_data(sql: str) -> list[dict]:
         cur.execute(_search_path_sql())
 
         if sql.upper().startswith("SELECT"):
-            cur.execute(_apply_limit(sql, config.MAX_ROWS))
+            cur.execute(_apply_limit(sql, settings.max_rows))
         else:
             cur.execute(sql)
 
@@ -484,6 +504,7 @@ def query_data(sql: str) -> list[dict]:
 
 
 @mcp.tool()
+@require_authz("explain_query")
 def explain_query(sql: str) -> list[dict]:
     """
     Show the EXPLAIN plan for a SELECT query without executing it.
@@ -510,6 +531,7 @@ def explain_query(sql: str) -> list[dict]:
 
 
 @mcp.tool()
+@require_authz("export_to_csv")
 def export_to_csv(sql: str) -> str:
     """
     Export query results to CSV format. Same security restrictions as query_data.
@@ -525,7 +547,7 @@ def export_to_csv(sql: str) -> str:
     cur = conn.cursor()
     try:
         cur.execute(_search_path_sql())
-        cur.execute(_apply_limit(sql, config.MAX_EXPORT_ROWS))
+        cur.execute(_apply_limit(sql, settings.max_export_rows))
 
         buffer = io.StringIO()
         writer = csv.writer(buffer)
@@ -563,152 +585,100 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Host to bind when using HTTP mode (default: 0.0.0.0)",
+        default=None,
+        help="Host to bind when using HTTP mode (default from settings)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8001,
-        help="Port to bind when using HTTP mode (default: 8001)",
+        default=None,
+        help="Port to bind when using HTTP mode (default from settings)",
     )
     args = parser.parse_args()
 
-    use_http = args.http or args.transport in ("http", "streamable-http")
+    # Determine transport from CLI args or settings. Validate the effective
+    # transport here too: CLI flags can override TRANSPORT after settings load.
+    use_http = args.http or args.transport in ("http", "streamable-http") or settings.transport == "http"
+
+    if use_http and settings.auth_mode == "none":
+        print("❌ FATAL: HTTP transport requires AUTH_MODE=oidc or AUTH_MODE=api-key.", file=sys.stderr)
+        sys.exit(1)
+    if use_http and (not settings.mcp_public_url or "<" in settings.mcp_public_url):
+        print("❌ FATAL: HTTP transport requires a real MCP_PUBLIC_URL.", file=sys.stderr)
+        sys.exit(1)
+    if use_http and not settings.authz_policy_path:
+        print("❌ FATAL: HTTP transport requires AUTHZ_POLICY_PATH.", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Load authorization policy ─────────────────────────────────────
+    if settings.authz_policy_path:
+        policy = AuthzPolicy.from_file(settings.authz_policy_path)
+    elif use_http:
+        print("❌ FATAL: HTTP transport requires an authorization policy.", file=sys.stderr)
+        sys.exit(1)
+    else:
+        policy = AuthzPolicy.allow_all()
+    set_policy(
+        policy,
+        allow_unauthenticated=not use_http and settings.auth_mode == "none",
+    )
 
     if use_http:
         import uvicorn
-        from starlette.requests import Request
-        from starlette.responses import JSONResponse
-        from starlette.types import ASGIApp, Receive, Scope, Send
-        from token_verifier import CognitoTokenVerifier
+        from src.auth.middleware import AuthMiddleware
 
-        # ── Cognito Token Verifier instance (if configured) ───────────────
-        cognito_verifier: CognitoTokenVerifier | None = None
-        if config.COGNITO_USER_POOL_ID and config.COGNITO_CLIENT_ID:
-            cognito_verifier = CognitoTokenVerifier(
-                user_pool_id=config.COGNITO_USER_POOL_ID,
-                client_id=config.COGNITO_CLIENT_ID,
-                region=config.COGNITO_REGION,
+        bind_host = args.host or settings.host
+        bind_port = args.port or settings.port
+
+        # ── Set up OIDC verifier (if configured) ─────────────────────
+        oidc_verifier: OIDCVerifier | None = None
+        if settings.auth_mode == "oidc":
+            oidc_verifier = OIDCVerifier(
+                issuer=settings.oidc_issuer,
+                audience=settings.oidc_audience,
+                jwks_uri=settings.oidc_jwks_uri,
+                required_scopes=settings.oidc_required_scopes,
+                group_claim=settings.oidc_group_claim,
+                roles_claim=settings.oidc_roles_claim,
             )
 
-        # ── Dual Authentication Middleware (Cognito OIDC + API Key) ───────
-        class AuthMiddleware:
-            """ASGI middleware supporting AWS Cognito OIDC JWTs and x-api-key fallback.
-
-            1. Allows RFC 9728 Protected Resource Metadata discovery at /.well-known/oauth-protected-resource
-            2. Allows CORS preflight OPTIONS requests
-            3. Authenticates via:
-               - x-api-key header: Static MCP_API_KEY (fast path)
-               - Authorization: Bearer <JWT>: AWS Cognito User Pool JWT (RS256 signature + claims)
-            4. Returns 401 with WWW-Authenticate header if unauthenticated.
-            """
-
-            def __init__(
-                self,
-                app: ASGIApp,
-                api_key: str | None,
-                verifier: CognitoTokenVerifier | None,
-                public_url: str,
-            ):
-                self.app = app
-                self.api_key = api_key
-                self.verifier = verifier
-                self.public_url = public_url.rstrip("/")
-
-            async def __call__(self, scope: Scope, receive: Receive, send: Send):
-                if scope["type"] != "http":
-                    return await self.app(scope, receive, send)
-
-                request = Request(scope)
-                path = request.url.path
-
-                # RFC 9728: Protected Resource Metadata endpoint
-                if path.endswith("/.well-known/oauth-protected-resource") and request.method == "GET":
-                    auth_servers = []
-                    if self.verifier:
-                        auth_servers.append(self.verifier.issuer)
-                    prm = {
-                        "resource": self.public_url,
-                        "authorization_servers": auth_servers,
-                        "scopes_supported": ["openid", "profile", "email"],
-                    }
-                    response = JSONResponse(prm, status_code=200)
-                    return await response(scope, receive, send)
-
-                # Allow CORS preflight requests
-                if request.method == "OPTIONS":
-                    return await self.app(scope, receive, send)
-
-                # If no authentication method is configured, pass through
-                if not self.api_key and not self.verifier:
-                    return await self.app(scope, receive, send)
-
-                # 1. Check x-api-key header for static API key
-                api_key_header = request.headers.get("x-api-key", "").strip()
-                if api_key_header and self.api_key and api_key_header == self.api_key:
-                    return await self.app(scope, receive, send)
-
-                # 2. Check Authorization: Bearer header for Cognito OIDC JWT
-                auth_header = request.headers.get("authorization", "")
-                if auth_header.startswith("Bearer ") and self.verifier:
-                    token = auth_header[7:].strip()
-                    claims = await self.verifier.verify_token(token)
-                    if claims is not None:
-                        # Attach authenticated user identity to scope
-                        user_identity = (
-                            claims.get("cognito:username")
-                            or claims.get("username")
-                            or claims.get("email")
-                            or claims.get("sub")
-                        )
-                        scope["auth_user"] = user_identity
-                        return await self.app(scope, receive, send)
-
-                # Unauthenticated: build WWW-Authenticate header
-                if self.verifier:
-                    prm_url = f"{self.public_url}/.well-known/oauth-protected-resource"
-                    www_auth = f'Bearer realm="redshift-mcp", resource_metadata="{prm_url}"'
-                else:
-                    www_auth = 'Bearer realm="redshift-mcp"'
-
-                response = JSONResponse(
-                    {"error": "Unauthorized – invalid or missing token / API key"},
-                    status_code=401,
-                    headers={"WWW-Authenticate": www_auth},
-                )
-                return await response(scope, receive, send)
-
-        # ── Build and wrap the Starlette app ──────────────────────────────
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
+        # ── Build and wrap the Starlette app ─────────────────────────
+        mcp.settings.host = bind_host
+        mcp.settings.port = bind_port
         starlette_app = mcp.streamable_http_app()
         wrapped_app = AuthMiddleware(
             starlette_app,
-            api_key=config.MCP_API_KEY,
-            verifier=cognito_verifier,
-            public_url=config.MCP_PUBLIC_URL,
+            verifier=oidc_verifier,
+            api_key=settings.mcp_api_key if settings.auth_mode == "api-key" else None,
+            public_url=settings.mcp_public_url,
+            scopes_supported=settings.oidc_required_scopes,
+            cors_origins=settings.cors_origins,
         )
 
-        print(f"🚀 Starting Redshift MCP server in Streamable HTTP mode on http://{args.host}:{args.port}/mcp")
-        if cognito_verifier and config.MCP_API_KEY:
-            print(f"   🛡️  Dual authentication ENABLED:")
-            print(f"      • AWS Cognito OIDC (User Pool: {config.COGNITO_USER_POOL_ID}, Client ID: {config.COGNITO_CLIENT_ID})")
-            print(f"      • Static API Key fallback (x-api-key header)")
-        elif cognito_verifier:
-            print(f"   🔒 AWS Cognito OIDC authentication ENABLED (User Pool: {config.COGNITO_USER_POOL_ID})")
-        elif config.MCP_API_KEY:
+        print(f"🚀 Starting Redshift MCP server in Streamable HTTP mode on http://{bind_host}:{bind_port}/mcp")
+        if oidc_verifier:
+            print(f"   🔒 OIDC authentication ENABLED (issuer: {settings.oidc_issuer})")
+        elif settings.auth_mode == "api-key":
             print(f"   🔑 API key authentication ENABLED (MCP_API_KEY)")
+        # No "open" case — settings validation already prevents this.
+
+        if settings.authz_policy_path:
+            print(f"   📋 Authorization policy loaded from: {settings.authz_policy_path}")
         else:
-            print(f"   ⚠️  No authentication configured — server is OPEN")
+            print(f"   ⚠️  No authorization policy — all tools allowed for stdio dev mode")
 
         uvi_config = uvicorn.Config(
             wrapped_app,
-            host=args.host,
-            port=args.port,
-            log_level="info",
+            host=bind_host,
+            port=bind_port,
+            log_level=settings.log_level.lower(),
         )
         server = uvicorn.Server(uvi_config)
         asyncio.run(server.serve())
     else:
+        print("🚀 Starting Redshift MCP server in stdio mode")
+        if settings.authz_policy_path:
+            print(f"   📋 Authorization policy loaded from: {settings.authz_policy_path}")
+        else:
+            print(f"   ⚠️  No authorization policy — all tools allowed (stdio dev mode)")
         mcp.run()

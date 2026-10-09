@@ -1,0 +1,44 @@
+# Authorization Policy — Redshift MCP Server
+#
+# Maps IdP app roles and/or group identifiers to allowed MCP tools and
+# database schemas.
+# Default effect is DENY — if no rule matches, access is refused.
+#
+# Rules can use "roles" (Entra ID App Roles → matched against the token's
+# "roles" claim), "groups" (IdP group membership), or both.
+#
+# For Cognito: use "groups" with the Cognito group name.
+# For Entra ID App Roles: use "roles" with the App Role value.
+# For Entra ID security groups: use "groups" with the Object ID.
+
+default_effect: deny
+
+rules:
+  # Analysts: read-only access to all Capsa IQ schemas
+  - roles:
+      - "capsa-analysts"
+    tools:
+      - list_schemas
+      - get_allowed_schemas
+      - list_tables
+      - describe_table
+      - sample_data
+      - search_columns
+      - query_data
+      - explain_query
+      - export_to_csv
+      - table_row_count
+    schemas:
+      - gold_capsaai
+      - gold_capsaai_cefi
+      - gold_capsaai_cspp
+      - report_capsaai
+      - report_insight
+
+  # Admins: access to all tools and schemas
+  - roles:
+      - "capsa-admins"
+    tools:
+      - "*"
+    schemas:
+      - "*"

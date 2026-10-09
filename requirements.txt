@@ -1,7 +1,21 @@
-fastmcp>=0.8.0
-psycopg2-binary>=2.9.0
-python-dotenv>=1.0.0
+# Redshift MCP Server — runtime dependencies (pinned)
+fastmcp==3.4.7
+psycopg2-binary==2.9.10
+python-dotenv==1.1.1
 sshtunnel==0.1.5
 paramiko>=2.7,<3.0
-streamlit>=1.45.0
-boto3>=1.34.0
+
+# Authentication
+PyJWT[crypto]==2.13.0
+httpx==0.28.1
+cryptography>=44.0.0
+
+# Authorization policy
+PyYAML>=6.0.2
+
+# ASGI server (HTTP mode)
+uvicorn==0.52.3
+starlette==1.6.0
+
+# AWS Secrets Manager (optional — only needed when DB_SECRET_ARN is set)
+# boto3>=1.34.0

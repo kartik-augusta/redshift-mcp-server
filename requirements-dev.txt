@@ -1,0 +1,7 @@
+# Redshift MCP Server — dev/test dependencies
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.25.0
+ruff>=0.11.0
+mypy>=1.14.0
